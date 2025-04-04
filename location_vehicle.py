@@ -72,7 +72,7 @@ def main():
             "vehicles": "s3://vehicle-rental-marketplace/input-data/vehicles.csv"
         }
         
-        output_path = "s3://vehicle-rental-marketplace/output-data/location-vehicle"
+        output_path = "s3://vehicle-rental-marketplace/output-data/location-vehicle/"
         
         try:
             # Read input data with error handling
