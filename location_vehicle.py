@@ -87,7 +87,7 @@ def main():
         try:
             # Join rental transactions with vehicle data
             rental_vehicle_df = rental.join(vehicles, "vehicle_id", "left")
-            write_parquet_with_checks(rental_vehicle_df, output_path, "rental-vehicle data")
+            write_parquet_with_checks(rental_vehicle_df, output_path, "rental-vehicledata")
             
             # Join with location data
             rental_vehicle_location_df = rental_vehicle_df.join(
