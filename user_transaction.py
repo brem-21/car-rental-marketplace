@@ -53,7 +53,7 @@ total_rental_hours_per_user = rental_duration.groupBy("user_id") \
 
 
 ### ---------------- SAVING METRICS TO S3 ---------------- ###
-output_path = "s3://vehicle-rental-marketplace/output-data/location-vehicle/"
+output_path = "s3://vehicle-rental-marketplace/output-data/"
 
 # Write DataFrames to S3 in Parquet format
 daily_transactions.write.parquet(output_path + "daily_transactions", mode="overwrite")
