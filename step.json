@@ -1,0 +1,160 @@
+{
+  "Comment": "Car Rental Marketplace Pipeline",
+  "StartAt": "Create EMR Cluster",
+  "States": {
+    "Create EMR Cluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:createCluster.sync",
+      "Parameters": {
+        "Name": "car-rental-pipeline-cluster",
+        "ReleaseLabel": "emr-6.12.0",
+        "Applications": [
+          {
+            "Name": "Spark"
+          }
+        ],
+        "Instances": {
+          "InstanceGroups": [
+            {
+              "InstanceRole": "MASTER",
+              "InstanceType": "m5.xlarge",
+              "InstanceCount": 1
+            },
+            {
+              "InstanceRole": "CORE",
+              "InstanceType": "m5.xlarge",
+              "InstanceCount": 2
+            }
+          ],
+          "KeepJobFlowAliveWhenNoSteps": true
+        },
+        "JobFlowRole": "EMR_EC2_DefaultRole",
+        "ServiceRole": "EMR_DefaultRole",
+        "LogUri": "s3://vehicle-rental-marketplace/emr-logs/"
+      },
+      "ResultPath": "$.ClusterInfo",
+      "Next": "Run Spark Jobs in Parallel"
+    },
+    "Run Spark Jobs in Parallel": {
+      "Type": "Parallel",
+      "Branches": [
+        {
+          "StartAt": "Run Location-Vehicle Spark Job",
+          "States": {
+            "Run Location-Vehicle Spark Job": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+              "Parameters": {
+                "ClusterId.$": "$.ClusterInfo.ClusterId",
+                "Step": {
+                  "Name": "Location and Vehicle Performance Metrics",
+                  "ActionOnFailure": "CONTINUE",
+                  "HadoopJarStep": {
+                    "Jar": "command-runner.jar",
+                    "Args": [
+                      "spark-submit",
+                      "--deploy-mode",
+                      "cluster",
+                      "s3://vehicle-rental-marketplace/location_vehicle.py"
+                    ]
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        },
+        {
+          "StartAt": "Run User-Transaction Spark Job",
+          "States": {
+            "Run User-Transaction Spark Job": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::elasticmapreduce:addStep.sync",
+              "Parameters": {
+                "ClusterId.$": "$.ClusterInfo.ClusterId",
+                "Step": {
+                  "Name": "User and Transaction Analysis",
+                  "ActionOnFailure": "CONTINUE",
+                  "HadoopJarStep": {
+                    "Jar": "command-runner.jar",
+                    "Args": [
+                      "spark-submit",
+                      "--deploy-mode",
+                      "cluster",
+                      "s3://vehicle-rental-marketplace/user_transaction.py"
+                    ]
+                  }
+                }
+              },
+              "End": true
+            }
+          }
+        }
+      ],
+      "Next": "Trigger Glue Crawler"
+    },
+    "Trigger Glue Crawler": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::aws-sdk:glue:startCrawler",
+      "Parameters": {
+        "Name": "car_rental"
+      },
+      "Next": "Wait for Crawler"
+    },
+    "Wait for Crawler": {
+      "Type": "Wait",
+      "Seconds": 60,
+      "Next": "Query Athena - Highest Revenue Location"
+    },
+    "Query Athena - Highest Revenue Location": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "SELECT location, SUM(revenue) AS total_revenue FROM car_rental.location_vehicle GROUP BY location ORDER BY total_revenue DESC LIMIT 1;",
+        "QueryExecutionContext": {
+          "Database": "car_rental"
+        },
+        "ResultConfiguration": {
+          "OutputLocation": "s3://vehicle-rental-marketplace/athena-results/"
+        }
+      },
+      "Next": "Query Athena - Most Rented Vehicle Type"
+    },
+    "Query Athena - Most Rented Vehicle Type": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "SELECT vehicle_type, COUNT(*) AS rentals FROM car_rental.location_vehicle GROUP BY vehicle_type ORDER BY rentals DESC LIMIT 1;",
+        "QueryExecutionContext": {
+          "Database": "car_rental"
+        },
+        "ResultConfiguration": {
+          "OutputLocation": "s3://vehicle-rental-marketplace/athena-results/"
+        }
+      },
+      "Next": "Query Athena - Top Spending Users"
+    },
+    "Query Athena - Top Spending Users": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::athena:startQueryExecution.sync",
+      "Parameters": {
+        "QueryString": "SELECT user_id, SUM(total_spent) AS total_spent FROM car_rental.user_transactions GROUP BY user_id ORDER BY total_spent DESC LIMIT 5;",
+        "QueryExecutionContext": {
+          "Database": "car_rental"
+        },
+        "ResultConfiguration": {
+          "OutputLocation": "s3://vehicle-rental-marketplace/athena-results/"
+        }
+      },
+      "Next": "Terminate EMR Cluster"
+    },
+    "Terminate EMR Cluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:terminateCluster.sync",
+      "Parameters": {
+        "ClusterId.$": "$.ClusterInfo.ClusterId"
+      },
+      "End": true
+    }
+  }
+}
