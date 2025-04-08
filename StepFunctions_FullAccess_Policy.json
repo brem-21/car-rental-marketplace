@@ -1,0 +1,47 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:*",
+        "glue:*",
+        "elasticmapreduce:*",
+        "iam:PassRole"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "elasticmapreduce.amazonaws.com",
+            "glue.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}
+EOFcat > StepFunctions_FullAccess_Policy.json << 'EOF'
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "s3:*",
+        "glue:*",
+        "elasticmapreduce:*",
+        "iam:PassRole"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": [
+            "elasticmapreduce.amazonaws.com",
+            "glue.amazonaws.com"
+          ]
+        }
+      }
+    }
+  ]
+}
