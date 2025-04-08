@@ -67,7 +67,7 @@ rental_duration_by_vehicle = rental_duration.join(vehicles_df, "vehicle_id", "in
                                  max("rental_hours").alias("max_rental_hours"))
 
 # Output path for processed data in S3
-base_output_path = "s3://vehicle-rental-marketplace/output-data/user_transactions"
+base_output_path = "s3://vehicle-rental-marketplace/output-data/"
 
 # Log the output paths before writing
 logging.info(f"Writing processed data to {base_output_path}")
