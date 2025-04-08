@@ -1,117 +1,63 @@
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
+from pyspark.sql.functions import col, count, sum, avg, min, max, approx_count_distinct, date_format
 
-spark = SparkSession.builder.appName("UserTransaction").getOrCreate()
+# Initialize Spark session
+spark = SparkSession.builder.appName("Rental_Analytics").getOrCreate()
 
-# Define schemas
-rental_schema = StructType([
-    StructField("rental_id", StringType(), True),
-    StructField("user_id", StringType(), True),
-    StructField("vehicle_id", StringType(), True),
-    StructField("rental_start_time", TimestampType(), True),
-    StructField("rental_end_time", TimestampType(), True),
-    StructField("pickup_location", IntegerType(), True),
-    StructField("dropoff_location", IntegerType(), True),
-    StructField("total_amount", DoubleType(), True)
-])
+input_path = "s3://vehicle-rental-marketplace/input-data/"
 
-location_schema = StructType([
-    StructField("location_id", IntegerType(), True),
-    StructField("location_name", StringType(), True),
-    StructField("address", StringType(), True),
-    StructField("city", StringType(), True),
-    StructField("state", StringType(), True),
-    StructField("zip_code", IntegerType(), True),
-    StructField("latitude", DoubleType(), True),
-    StructField("longitude", DoubleType(), True)
-])
 
-user_schema = StructType([
-    StructField("user_id", StringType(), True),
-    StructField("first_name", StringType(), True),
-    StructField("last_name", StringType(), True),
-    StructField("email", StringType(), True),
-    StructField("phone_number", StringType(), True),
-    StructField("driver_license_number", StringType(), True),
-    StructField("driver_license_expiry", DateType(), True),
-    StructField("creation_date", DateType(), True),
-    StructField("is_active", IntegerType(), True)
-])
+users_df = spark.read.csv(input_path + "users.csv", header=True, inferSchema=True)
+locations_df = spark.read.csv(input_path + "locations.csv", header=True, inferSchema=True)
+rentals_df = spark.read.csv(input_path + "rental_transactions.csv", header=True, inferSchema=True)
+vehicles_df = spark.read.csv(input_path + "vehicles.csv", header=True, inferSchema=True)
 
-vehicle_schema = StructType([
-    StructField("active", IntegerType(), True),
-    StructField("vehicle_license_number", StringType(), True),
-    StructField("registration_name", StringType(), True),
-    StructField("license_type", StringType(), True),
-    StructField("expiration_date", StringType(), True),
-    StructField("permit_license_number", StringType(), True),
-    StructField("certification_date", DateType(), True),
-    StructField("vehicle_year", IntegerType(), True),
-    StructField("base_telephone_number", StringType(), True),
-    StructField("base_address", StringType(), True),
-    StructField("vehicle_id", StringType(), True),
-    StructField("last_update_timestamp", StringType(), True),
-    StructField("brand", StringType(), True),
-    StructField("vehicle_type", StringType(), True)
-])
 
-# File URLs
-location_url = "s3://vehicle-rental-marketplace/input-data/locations.csv"
-user_url = "s3://vehicle-rental-marketplace/input-data/users.csv"
-transaction_url = "s3://vehicle-rental-marketplace/input-data/rental_transactions.csv"
-vehicle_url = "s3://vehicle-rental-marketplace/input-data/vehicles.csv"
-output_path = "s3://vehicle-rental-marketplace/output-data/user_transactions"
 
-# Read CSV files with explicit schemas
-locations = spark.read.csv(location_url, header=True, schema=location_schema)
-users = spark.read.csv(user_url, header=True, schema=user_schema)
-rental = spark.read.csv(transaction_url, header=True, schema=rental_schema)
-vehicles = spark.read.csv(vehicle_url, header=True, schema=vehicle_schema)
+rental_duration = rentals_df.withColumn("rental_hours", 
+    (col("rental_end_time").cast("long") - col("rental_start_time").cast("long")) / 3600)
 
-# Calculate the rental duration in hours
-# Assuming rental_start_time and rental_end_time are in string format
-rental = rental.withColumn(
-    "rental_duration_hours",
-    (col("rental_end_time").cast("long") - col("rental_start_time").cast("long")) / 3600 # Enclose the subtraction within parentheses and divide the result by 3600
-)
+rental_duration_by_vehicle = rental_duration.join(vehicles_df, "vehicle_id", "inner") \
+    .groupBy("vehicle_type").agg(avg("rental_hours").alias("avg_rental_hours"),
+                                 min("rental_hours").alias("min_rental_hours"),
+                                 max("rental_hours").alias("max_rental_hours"))
 
-# Join the rental transactions with user data
-user_rental = rental.join(users, rental.user_id == users.user_id, "inner")
-user_rental.write.mode("overwrite").parquet(output_path)
 
-# Calculate the total revenue per day for each total transaction
-daily_transactions_revenue = rental.withColumn(
-    "transaction_date", to_date("rental_start_time")
-).groupBy("transaction_date").agg(
-    count("rental_id").alias("total_transactions"),
-    sum("total_amount").alias("total_revenue")
-)
 
-# write the daily transactions revenue to S3
-daily_transactions_revenue.write.mode("overwrite").parquet(output_path)
+### ---------------- USER AND TRANSACTION METRICS ---------------- ###
+# 1. Total Daily Transactions and Revenue
+daily_transactions = rentals_df.withColumn("rental_date", date_format("rental_start_time", "yyyy-MM-dd")) \
+    .groupBy("rental_date").agg(count("rental_id").alias("total_daily_transactions"),
+                                sum("total_amount").alias("total_daily_revenue"))
 
-# Average transaction amount 
-avg_transaction = rental.agg(avg("total_amount").alias("average_transaction"))
-avg_transaction.write.mode("overwrite").parquet(output_path)
+# 2. Average Transaction Value
+avg_transaction_value = rentals_df.agg(avg("total_amount").alias("avg_transaction_value"))
 
-# User engagements
-user_engagement = rental.groupby("user_id").agg(
-    count("rental_id").alias("total_transactions"),
-    sum("total_amount").alias("total_revenue")
-)
-user_engagement.write.mode("overwrite").parquet(output_path)
+# 3. User Engagement Metrics (Total Transactions & Total Revenue Per User)
+user_engagement = rentals_df.groupBy("user_id") \
+    .agg(count("rental_id").alias("total_transactions"), sum("total_amount").alias("total_revenue")) \
+    .join(users_df, "user_id", "left") \
+    .select("first_name", "last_name", "email", "total_transactions", "total_revenue")
 
-#User spending by min, max
-user_spending_metrics = rental.groupBy("user_id").agg(
-    max("total_amount").alias("max_spent"),
-    min("total_amount").alias("min_spent")
-)
+# 4. Max and Min Spending per User
+user_spending = rentals_df.groupBy("user_id") \
+    .agg(max("total_amount").alias("max_spent"), min("total_amount").alias("min_spent")) \
+    .join(users_df, "user_id", "left") \
+    .select("first_name", "last_name", "email", "max_spent", "min_spent")
 
-user_spending_metrics.write.mode("overwrite").parquet(output_path)
+# 5. Total Rental Hours per User
+total_rental_hours_per_user = rental_duration.groupBy("user_id") \
+    .agg(sum("rental_hours").alias("total_rental_hours")) \
+    .join(users_df, "user_id", "left") \
+    .select("first_name", "last_name", "email", "total_rental_hours")
 
-#user rental duration
-total_rental_duration = rental.groupby("user_id").agg(sum("rental_duration_hours").alias("total_rental_duration_hours"))
-total_rental_duration.write.mode("overwrite").parquet(output_path)
 
-spark.stop()
+### ---------------- SAVING METRICS TO S3 ---------------- ###
+output_path = "s3://vehicle-rental-marketplace/output-data/location-vehicle/"
+
+# Write DataFrames to S3 in Parquet format
+daily_transactions.write.parquet(output_path + "daily_transactions", mode="overwrite")
+avg_transaction_value.write.parquet(output_path + "avg_transaction_value", mode="overwrite")
+user_engagement.write.parquet(output_path + "user_engagement", mode="overwrite")
+user_spending.write.parquet(output_path + "user_spending", mode="overwrite")
+total_rental_hours_per_user.write.parquet(output_path + "total_rental_hours_per_user", mode="overwrite")

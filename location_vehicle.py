@@ -1,155 +1,94 @@
+import logging
 from pyspark.sql import SparkSession
-from pyspark.sql.functions import *
-from pyspark.sql.types import *
+from pyspark.sql.functions import col, count, sum, avg, min, max, approx_count_distinct
 
-spark = SparkSession.builder.appName("UserTransaction").getOrCreate()
-
-# Define schemas
-rental_schema = StructType([
-    StructField("rental_id", StringType(), True),
-    StructField("user_id", StringType(), True),
-    StructField("vehicle_id", StringType(), True),
-    StructField("rental_start_time", TimestampType(), True),
-    StructField("rental_end_time", TimestampType(), True),
-    StructField("pickup_location", IntegerType(), True),
-    StructField("dropoff_location", IntegerType(), True),
-    StructField("total_amount", DoubleType(), True)
-])
-
-location_schema = StructType([
-    StructField("location_id", IntegerType(), True),
-    StructField("location_name", StringType(), True),
-    StructField("address", StringType(), True),
-    StructField("city", StringType(), True),
-    StructField("state", StringType(), True),
-    StructField("zip_code", IntegerType(), True),
-    StructField("latitude", DoubleType(), True),
-    StructField("longitude", DoubleType(), True)
-])
-
-user_schema = StructType([
-    StructField("user_id", StringType(), True),
-    StructField("first_name", StringType(), True),
-    StructField("last_name", StringType(), True),
-    StructField("email", StringType(), True),
-    StructField("phone_number", StringType(), True),
-    StructField("driver_license_number", StringType(), True),
-    StructField("driver_license_expiry", DateType(), True),
-    StructField("creation_date", DateType(), True),
-    StructField("is_active", IntegerType(), True)
-])
-
-vehicle_schema = StructType([
-    StructField("active", IntegerType(), True),
-    StructField("vehicle_license_number", StringType(), True),
-    StructField("registration_name", StringType(), True),
-    StructField("license_type", StringType(), True),
-    StructField("expiration_date", StringType(), True),
-    StructField("permit_license_number", StringType(), True),
-    StructField("certification_date", DateType(), True),
-    StructField("vehicle_year", IntegerType(), True),
-    StructField("base_telephone_number", StringType(), True),
-    StructField("base_address", StringType(), True),
-    StructField("vehicle_id", StringType(), True),
-    StructField("last_update_timestamp", StringType(), True),
-    StructField("brand", StringType(), True),
-    StructField("vehicle_type", StringType(), True)
-])
-
-# File URLs
-location_url = "s3://vehicle-rental-marketplace/input-data/locations.csv"
-user_url = "s3://vehicle-rental-marketplace/input-data/users.csv"
-transaction_url = "s3://vehicle-rental-marketplace/input-data/rental_transactions.csv"
-vehicle_url = "s3://vehicle-rental-marketplace/input-data/vehicles.csv"
-output_path = "s3://vehicle-rental-marketplace/output-data/user_transactions"
-
-# Read CSV files with explicit schemas
-locations = spark.read.csv(location_url, header=True, schema=location_schema)
-users = spark.read.csv(user_url, header=True, schema=user_schema)
-rental = spark.read.csv(transaction_url, header=True, schema=rental_schema)
-vehicles = spark.read.csv(vehicle_url, header=True, schema=vehicle_schema)
-
-
-# JOin the rental transactions with vehicle data
-rental_vehicle_df = rental.join(vehicles, "vehicle_id", "left")
-rental_vehicle_df.write.mode("overwrite").parquet(output_path)
-
-# Join the rental_vehicle transactions with location data
-rental_vehicle_location_df = rental_vehicle_df.join(
-    locations, rental_vehicle_df["pickup_location"] == locations["location_id"], "left"
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,  # You can change the level to DEBUG, ERROR, etc.
+    format='%(asctime)s - %(levelname)s - %(message)s'
 )
-rental_vehicle_location_df.write.mode("overwrite").parquet(output_path)
 
-# calculate the revenue per location
-revenue_per_location = rental.groupBy("pickup_location").agg(
-    sum("total_amount").alias("total_revenue")
-).join(
-    locations, rental["pickup_location"] == locations["location_id"], "left"
-).select(
-    col("location_id"),
-    col("location_name"),
-    col("total_revenue")
-)
-revenue_per_location.write.mode("overwrite").parquet(output_path)
+# Initialize Spark session
+spark = SparkSession.builder.appName("LocationVehicle").getOrCreate()
 
-# Compute total transactions per location (pickup_location)
-transactions_per_location = rental.groupBy("pickup_location").agg(
-    count("rental_id").alias("total_transactions")
-).join(
-    locations, rental["pickup_location"] == locations["location_id"], "left"
-).select(
-    col("location_id"),
-    col("location_name"),
-    col("total_transactions")
-)
-transactions_per_location.write.mode("overwrite").parquet(output_path)
+# Input path from S3
+input_path = "s3://vehicle-rental-marketplace/input-data/"
 
-# Compute average transaction amount per location (pickup_location)
-avg_transaction_per_location = rental.groupBy("pickup_location").agg(
-    avg("total_amount").alias("avg_transaction_amount")
-).join(
-    locations, rental["pickup_location"] == locations["location_id"], "left"
-).select(
-    col("location_id"),
-    col("location_name"),
-    col("avg_transaction_amount")
-)
-avg_transaction_per_location.write.mode("overwrite").parquet(output_path)
+# Read data from S3
+logging.info(f"Reading data from {input_path}")
+users_df = spark.read.csv(input_path + "users.csv", header=True, inferSchema=True)
+locations_df = spark.read.csv(input_path + "locations.csv", header=True, inferSchema=True)
+rentals_df = spark.read.csv(input_path + "rental_transactions.csv", header=True, inferSchema=True)
+vehicles_df = spark.read.csv(input_path + "vehicles.csv", header=True, inferSchema=True)
 
-# Compute max and min transaction amount per location (pickup_location)
-max_min_transaction_per_location = rental.groupBy("pickup_location").agg(
-    max("total_amount").alias("max_transaction_amount"),
-    min("total_amount").alias("min_transaction_amount")
-).join(
-    locations, rental["pickup_location"] == locations["location_id"], "left"
-).select(
-    col("location_id"),
-    col("location_name"),
-    col("max_transaction_amount"),
-    col("min_transaction_amount")
-)
-max_min_transaction_per_location.write.mode("overwrite").parquet(output_path)
+# 1. Revenue per Location
+logging.info("Calculating revenue per location...")
+revenue_per_location = rentals_df.groupBy("pickup_location") \
+    .agg(sum("total_amount").alias("total_revenue")) \
+    .join(locations_df, rentals_df.pickup_location == locations_df.location_id, "left") \
+    .select("location_name", "total_revenue", "location_id")
 
+# 2. Total Transactions per Location
+logging.info("Calculating total transactions per location...")
+transactions_per_location = rentals_df.groupBy("pickup_location") \
+    .agg(count("rental_id").alias("total_transactions")) \
+    .join(locations_df, rentals_df.pickup_location == locations_df.location_id, "left") \
+    .select("location_name", "total_transactions")
 
-# Compute unique vehicles used per location (pickup_location)
-unique_vehicles_per_location = rental.groupBy("pickup_location").agg(
-    countDistinct("vehicle_id").alias("unique_vehicles_used")
-).join(
-    locations, rental["pickup_location"] == locations["location_id"], "left"
-).select(
-    col("location_id"),
-    col("location_name"),
-    col("unique_vehicles_used")
-)
-unique_vehicles_per_location.write.mode("overwrite").parquet(output_path)
+# 3. Average Transaction Amount per Location
+logging.info("Calculating average transaction amount per location...")
+avg_transaction_per_location = rentals_df.groupBy("pickup_location") \
+    .agg(avg("total_amount").alias("avg_transaction_amount")) \
+    .join(locations_df, rentals_df.pickup_location == locations_df.location_id, "left") \
+    .select("location_name", "avg_transaction_amount")
 
+# 4. Max/Min Transaction Amount per Location
+logging.info("Calculating max/min transaction amount per location...")
+max_min_transaction_per_location = rentals_df.groupBy("pickup_location") \
+    .agg(max("total_amount").alias("max_transaction"), min("total_amount").alias("min_transaction")) \
+    .join(locations_df, rentals_df.pickup_location == locations_df.location_id, "left") \
+    .select("location_name", "max_transaction", "min_transaction")
 
-# calculate rental duration metrics
-rental_duration_metrics_by_vehicle_type = rental_vehicle_df.groupBy("vehicle_type").agg(
-    avg("rental_duration_hours").alias("avg_rental_duration"),
-    max("rental_duration_hours").alias("max_rental_duration"),
-    min("rental_duration_hours").alias("min_rental_duration"),
-    sum("rental_duration_hours").alias("total_rental_duration")
-)
-rental_duration_metrics_by_vehicle_type.write.mode("overwrite").parquet(output_path)
-spark.stop()
+# 5. Unique Vehicles Used per Location
+logging.info("Calculating unique vehicles per location...")
+unique_vehicles_per_location = rentals_df.groupBy("pickup_location") \
+    .agg(approx_count_distinct("vehicle_id").alias("unique_vehicles")) \
+    .join(locations_df, rentals_df.pickup_location == locations_df.location_id, "left") \
+    .select("location_name", "unique_vehicles")
+
+# 6. Rental Duration Metrics by Vehicle Type
+logging.info("Calculating rental duration metrics by vehicle type...")
+rental_duration = rentals_df.withColumn("rental_hours", 
+    (col("rental_end_time").cast("long") - col("rental_start_time").cast("long")) / 3600)
+
+rental_duration_by_vehicle = rental_duration.join(vehicles_df, "vehicle_id", "inner") \
+    .groupBy("vehicle_type").agg(avg("rental_hours").alias("avg_rental_hours"),
+                                 min("rental_hours").alias("min_rental_hours"),
+                                 max("rental_hours").alias("max_rental_hours"))
+
+# Output path for processed data in S3
+base_output_path = "s3://vehicle-rental-marketplace/output-data/user_transactions"
+
+# Log the output paths before writing
+logging.info(f"Writing processed data to {base_output_path}")
+
+# Write each DataFrame to S3 in Parquet format
+logging.info(f"Writing revenue per location to {base_output_path}revenue_per_location")
+revenue_per_location.write.parquet(base_output_path + "revenue_per_location", mode="overwrite")
+
+logging.info(f"Writing transactions per location to {base_output_path}transactions_per_location")
+transactions_per_location.write.parquet(base_output_path + "transactions_per_location", mode="overwrite")
+
+logging.info(f"Writing avg transaction per location to {base_output_path}avg_transaction_per_location")
+avg_transaction_per_location.write.parquet(base_output_path + "avg_transaction_per_location", mode="overwrite")
+
+logging.info(f"Writing max/min transaction per location to {base_output_path}max_min_transaction_per_location")
+max_min_transaction_per_location.write.parquet(base_output_path + "max_min_transaction_per_location", mode="overwrite")
+
+logging.info(f"Writing unique vehicles per location to {base_output_path}unique_vehicles_per_location")
+unique_vehicles_per_location.write.parquet(base_output_path + "unique_vehicles_per_location", mode="overwrite")
+
+logging.info(f"Writing rental duration by vehicle to {base_output_path}rental_duration_by_vehicle")
+rental_duration_by_vehicle.write.parquet(base_output_path + "rental_duration_by_vehicle", mode="overwrite")
+
+logging.info("Data successfully written to S3.")
