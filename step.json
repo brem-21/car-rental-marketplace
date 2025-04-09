@@ -33,7 +33,15 @@
         "LogUri": "s3://vehicle-rental-marketplace/emr-logs/"
       },
       "ResultPath": "$.ClusterInfo",
-      "Next": "Run Spark Jobs in Parallel"
+      "Next": "Run Spark Jobs in Parallel",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TerminateClusterOnFailure"
+        }
+      ]
     },
     "Run Spark Jobs in Parallel": {
       "Type": "Parallel",
@@ -91,7 +99,17 @@
           }
         }
       ],
-      "Next": "Trigger Glue Crawler"
+      "ResultPath": "$.ParallelResults",
+      "OutputPath": "$",
+      "Next": "Trigger Glue Crawler",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TerminateClusterOnFailure"
+        }
+      ]
     },
     "Trigger Glue Crawler": {
       "Type": "Task",
@@ -99,7 +117,15 @@
       "Parameters": {
         "Name": "car_rental"
       },
-      "Next": "Wait for Crawler"
+      "Next": "Wait for Crawler",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TerminateClusterOnFailure"
+        }
+      ]
     },
     "Wait for Crawler": {
       "Type": "Wait",
@@ -116,7 +142,15 @@
         }
       },
       "ResultPath": "$.AthenaQuery1",
-      "Next": "Query Athena - Most Rented Vehicle Type"
+      "Next": "Query Athena - Most Rented Vehicle Type",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TerminateClusterOnFailure"
+        }
+      ]
     },
     "Query Athena - Most Rented Vehicle Type": {
       "Type": "Task",
@@ -129,7 +163,15 @@
         }
       },
       "ResultPath": "$.AthenaQuery2",
-      "Next": "Query Athena - Top Spending User"
+      "Next": "Query Athena - Top Spending User",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TerminateClusterOnFailure"
+        }
+      ]
     },
     "Query Athena - Top Spending User": {
       "Type": "Task",
@@ -141,7 +183,15 @@
         }
       },
       "ResultPath": "$.AthenaQuery3",
-      "Next": "Terminate EMR Cluster"
+      "Next": "Terminate EMR Cluster",
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TerminateClusterOnFailure"
+        }
+      ]
     },
     "Terminate EMR Cluster": {
       "Type": "Task",
@@ -149,7 +199,39 @@
       "Parameters": {
         "ClusterId.$": "$.ClusterInfo.ClusterId"
       },
+      "End": true,
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Next": "TerminateClusterOnFailure"
+        }
+      ]
+    },
+    "TerminateClusterOnFailure": {
+      "Type": "Choice",
+      "Choices": [
+        {
+          "Variable": "$.ClusterInfo.ClusterId",
+          "IsPresent": true,
+          "Next": "ForceTerminateCluster"
+        }
+      ],
+      "Default": "FailState"
+    },
+    "ForceTerminateCluster": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::elasticmapreduce:terminateCluster.sync",
+      "Parameters": {
+        "ClusterId.$": "$.ClusterInfo.ClusterId"
+      },
       "End": true
+    },
+    "FailState": {
+      "Type": "Fail",
+      "Error": "PipelineExecutionFailed",
+      "Cause": "Pipeline failed with error: $.error"
     }
   }
 }
