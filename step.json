@@ -115,6 +115,7 @@
           "OutputLocation": "s3://vehicle-rental-marketplace/athena-results/"
         }
       },
+      "ResultPath": "$.AthenaQuery1",
       "Next": "Query Athena - Most Rented Vehicle Type"
     },
     "Query Athena - Most Rented Vehicle Type": {
@@ -127,6 +128,7 @@
           "OutputLocation": "s3://vehicle-rental-marketplace/athena-results/"
         }
       },
+      "ResultPath": "$.AthenaQuery2",
       "Next": "Query Athena - Top Spending User"
     },
     "Query Athena - Top Spending User": {
@@ -138,6 +140,7 @@
           "OutputLocation": "s3://vehicle-rental-marketplace/athena-results/"
         }
       },
+      "ResultPath": "$.AthenaQuery3",
       "Next": "Terminate EMR Cluster"
     },
     "Terminate EMR Cluster": {
